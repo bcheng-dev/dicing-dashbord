@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Wafer Dicing Grid Optimizer</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; }
+
+  label { display: block; margin: 4px 0 2px; }
+  input { width: 100px; margin-right: 10px; }
+
+  /* Three-column layout */
+ #layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;              /* gap between inputs and the pair */
+  align-items: flex-start;
+}
+
+/* Left column (inputs) stays as before */
+#col-inputs {
+  flex: 0 0 260px;
+  max-width: 280px;
+}
+
+/* New wrapper: canvas + log sit right next to each other */
+#canvas-and-log {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 8px;               /* distance between drawing and word output */
+  flex: 1 1 0;            /* take remaining space */
+}
+
+/* Canvas column */
+#canvasWrapper {
+  flex: 0 0 auto;         /* size from canvas */
+}
+
+/* Log column hugs canvas on its right */
+#col-log {
+  flex: 0 0 260px;        /* width of printed output area */
+  max-width: 260px;
+}
+
+  #controls {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+
+  #canvasWrapper { margin-top: 0; }
+  #waferCanvas {
+    border: 1px solid #ccc;
+    background: #fdfdfd;
+    width: 100%;      /* fill its flex column */
+    height: auto;     /* keep aspect ratio */
+    max-width: 480px; /* cap size so it doesn't get too huge */
+  }
+
+
+  @media (max-width: 900px) {
+    #col-inputs,
+    #col-canvas,
+    #col-log {
+      flex: 1 1 100%;
+    }
+  }
+</style>
+</head>
+<body>
+
+<h2>Wafer dicing-grid parameters</h2>
+
+<div id="layout">
+  <!-- Left: vertical inputs -->
+  <div id="col-inputs">
+    <div id="controls">
+      <div>
+        <label>Wafer diameter (inch)</label>
+        <input id="D_inch" type="number" step="0.01" value="4">
+      </div>
+      <div>
+        <label>Die width (mm)</label>
+        <input id="w_mm" type="number" step="0.001" value="10">
+      </div>
+      <div>
+        <label>Die height (mm)</label>
+        <input id="h_mm" type="number" step="0.001" value="10">
+      </div>
+      <div>
+        <label>Kerf width (mm)</label>
+        <input id="kerf_mm" type="number" step="0.001" value="0.025">
+      </div>
+      <div>
+        <label>Chord length (mm, flat on top)</label>
+        <input id="chord_mm" type="number" step="0.01" value="30">
+      </div>
+      <div>
+        <label>Min corner clearance (mm)</label>
+        <input id="cornerClear_mm" type="number" step="0.001" value="3">
+      </div>
+      <div>
+        <label>Thickness - Silicon (mm)</label>
+        <input id="thk_Si" type="number" step="0.001" value="0.5">
+      </div>
+      <div>
+        <label>Thickness - Glass (mm)</label>
+        <input id="thk_Glass" type="number" step="0.001" value="0.5">
+      </div>
+      <div>
+        <label>Thickness - Sapphire (mm)</label>
+        <input id="thk_Sapphire" type="number" step="0.001" value="0.5">
+      </div>
+      <div>
+        <button id="runBtn">Optimize & Draw</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Middle: drawing -->
+  <div id="canvas-and-log">
+    <div id="canvasWrapper">
+      <canvas id="waferCanvas" width="1000" height="1200"></canvas>
+    </div>
+    <div id="col-log">
+      <pre id="log"></pre>
+    </div>
+  </div>
+</div>
+
+
+<script>
+function cutTime(thk, feed, step, totalCutLen) {
+  if (!isFinite(thk) || thk <= 0) return NaN;
+  if (!isFinite(feed) || feed <= 0) return NaN;
+  if (!isFinite(step) || step <= 0) step = Infinity;
+  let nPass = (step === Infinity) ? 1 : Math.ceil(thk / step);
+  return (totalCutLen / feed) * nPass;
+}
+
+function formatTime(totalSeconds) {
+  if (!isFinite(totalSeconds) || totalSeconds <= 0) return " n/a";
+  let hours = Math.floor(totalSeconds / 3600);
+  let minutes = Math.floor((totalSeconds % 3600) / 60);
+  let seconds = totalSeconds % 60;
+  let parts = [];
+  if (hours > 0) parts.push(hours + " hr");
+  if (minutes > 0) parts.push(minutes + " min");
+  if (parts.length === 0 || seconds > 0) parts.push(seconds.toFixed(1) + " s");
+  return " " + parts.join(" ");
+}
+
+function uniqueAbsTol(arr, tol) {
+  if (arr.length === 0) return [];
+  arr = arr.slice().sort(function(a,b){return a-b;});
+  let v = [arr[0]];
+  for (let i = 1; i < arr.length; i++) {
+    if (Math.abs(arr[i] - v[v.length - 1]) > tol) {
+      v.push(arr[i]);
+    }
+  }
+  return v;
+}
+
+function optimizeGridOffsetsJS(D_inch, w_mm, h_mm, kerf_mm, chord_mm,
+                               cornerClear_mm, waferThk_mm) {
+  // nSamples is forced to 0 (max resolution)
+  let nSamples = 0;
+
+  // 1. Convert diameter to mm
+  let D_mm = D_inch * 25.4;
+  let R_mm = D_mm / 2;
+
+  // 2. Geometry
+  let pitchX = w_mm + kerf_mm;
+  let pitchY = h_mm + kerf_mm;
+
+  let sagitta_mm = 0;
+  if (chord_mm > 0) {
+    let tmp = R_mm*R_mm - (chord_mm/2)*(chord_mm/2);
+    sagitta_mm = R_mm - Math.sqrt(Math.max(tmp, 0));
+  }
+  let flatY = R_mm - sagitta_mm;
+
+  let R_eff2 = Math.max(R_mm - cornerClear_mm, 0);
+  R_eff2 = R_eff2 * R_eff2;
+  let flatYeff = flatY - cornerClear_mm;
+  let tol = 1e-12;
+
+  // 3. Build offset grids (same as original nSamples==0 branch)
+  let dxVals = [], dyVals = [];
+  let step = 0.005 * Math.min(w_mm, h_mm);
+  let nX = Math.max(200, Math.ceil(pitchX / step));
+  let nY = Math.max(200, Math.ceil(pitchY / step));
+  for (let i=0;i<nX;i++) dxVals.push(0 + (pitchX - 0)*i/(nX-1));
+  for (let j=0;j<nY;j++) dyVals.push(0 + (pitchY - 0)*j/(nY-1));
+
+  // 4. Exhaustive search
+  let best = {
+    count: -Infinity,
+    imbalance: Infinity,
+    minMargin: -Infinity,
+    minCornerClear: -Infinity,
+    dx: 0,
+    dy: 0
+  };
+
+  for (let dx of dxVals) {
+    for (let dy of dyVals) {
+      let cnt = 0;
+      let minArcClr = Infinity;
+      let minFlatClr = Infinity;
+      let xL = -R_mm + dx;
+
+      while (xL + w_mm <= R_mm + 1e-9) {
+        let yB = -R_mm + dy;
+        while (yB + h_mm <= R_mm + 1e-9) {
+          let cx = [xL, xL+w_mm, xL, xL+w_mm];
+          let cy = [yB, yB, yB+h_mm, yB+h_mm];
+
+          let d2 = [];
+          for (let k=0;k<4;k++) d2.push(cx[k]*cx[k] + cy[k]*cy[k]);
+          let insideCircle = d2.every(v => v <= R_eff2 + tol);
+          let insideFlat = cy.every(v => v <= flatYeff + tol);
+
+          if (insideCircle && insideFlat) {
+            cnt++;
+            let arcClrs = d2.map(v => R_mm - Math.sqrt(v));
+            let flatClrs = cy.map(v => flatY - v);
+            minArcClr = Math.min(minArcClr, Math.min.apply(null, arcClrs));
+            minFlatClr = Math.min(minFlatClr, Math.min.apply(null, flatClrs));
+          }
+
+          yB += pitchY;
+        }
+        xL += pitchX;
+      }
+
+      if (cnt < best.count) continue;
+
+      // margins
+      let leftEdge = -R_mm + dx;
+      let rightEdge = xL - pitchX + w_mm;
+      let bottomEdge = -R_mm + dy;
+      let topEdge = Math.min((-R_mm + dy) + Math.floor((2*R_mm - h_mm - dy)/pitchY)*pitchY + h_mm, flatY);
+
+      let leftMargin = leftEdge + R_mm;
+      let rightMargin = R_mm - rightEdge;
+      let bottomMargin = bottomEdge + R_mm;
+      let topMargin = flatY - topEdge;
+
+      let imbalance = Math.abs(leftMargin - rightMargin) +
+                      Math.abs(bottomMargin - topMargin);
+      let minMargin = Math.min(leftMargin, rightMargin, bottomMargin, topMargin);
+      let minCornerClear = Math.min(minArcClr, minFlatClr);
+
+      let better = false;
+      if (cnt > best.count) {
+        better = true;
+      } else if (cnt === best.count) {
+        if (imbalance < best.imbalance - 1e-9) {
+          better = true;
+        } else if (Math.abs(imbalance - best.imbalance) < 1e-9 &&
+                   (minMargin > best.minMargin + 1e-9)) {
+          better = true;
+        } else if (Math.abs(imbalance - best.imbalance) < 1e-9 &&
+                   Math.abs(minMargin - best.minMargin) < 1e-9 &&
+                   (minCornerClear > best.minCornerClear + 1e-9)) {
+          better = true;
+        }
+      }
+
+      if (better) {
+        best.count = cnt;
+        best.dx = dx;
+        best.dy = dy;
+        best.imbalance = imbalance;
+        best.minMargin = minMargin;
+        best.minCornerClear = minCornerClear;
+      }
+    }
+  }
+
+  // 5. Recreate full grid for best offsets
+  let x0 = -R_mm + best.dx;
+  let y0 = -R_mm + best.dy;
+  let xLefts = [];
+  for (let x = x0; x <= R_mm - w_mm + 1e-9; x += pitchX) xLefts.push(x);
+  let yBots = [];
+  for (let y = y0; y <= R_mm - h_mm + 1e-9; y += pitchY) yBots.push(y);
+
+  let xCuts_all = [];
+  let yCuts_all = [];
+  for (let x of xLefts) {
+    xCuts_all.push(x - kerf_mm/2);
+    xCuts_all.push(x + w_mm + kerf_mm/2);
+  }
+  for (let y of yBots) {
+    yCuts_all.push(y - kerf_mm/2);
+    yCuts_all.push(y + h_mm + kerf_mm/2);
+  }
+
+  let xCuts_cand = xCuts_all.filter(x => Math.abs(x) <= R_mm + 1e-9);
+  let yCuts_cand = yCuts_all.filter(y => (Math.abs(y) <= R_mm + 1e-9) && (y <= flatY + 1e-9));
+
+  let dedupTol = 1e-9;
+  let xCuts_mm = uniqueAbsTol(xCuts_cand, dedupTol);
+  let yCuts_mm = uniqueAbsTol(yCuts_cand, dedupTol);
+
+  // segments
+  let segTol = 1e-9;
+
+  let capY = xCuts_mm.map(x => Math.sqrt(Math.max(R_mm*R_mm - x*x, 0)));
+  let y1v = capY.map(v => -v);
+  let y2v = capY.map(v => Math.min(v, flatY));
+  let hasV = y2v.map((v,i)=> (v - y1v[i]) > segTol);
+
+  let capX = yCuts_mm.map(y => Math.sqrt(Math.max(R_mm*R_mm - y*y, 0)));
+  let x1h = capX.map(v => -v);
+  let x2h = capX.map(v => v);
+  let hasH = yCuts_mm.map((y,i)=> (y <= flatY - segTol) && ((x2h[i]-x1h[i]) > segTol));
+
+  let xCuts_draw = [], yCuts_draw = [];
+  let y1v_draw = [], y2v_draw = [];
+  let x1h_draw = [], x2h_draw = [];
+  for (let i=0;i<xCuts_mm.length;i++){
+    if (hasV[i]) {
+      xCuts_draw.push(xCuts_mm[i]);
+      y1v_draw.push(y1v[i]);
+      y2v_draw.push(y2v[i]);
+    }
+  }
+  for (let i=0;i<yCuts_mm.length;i++){
+    if (hasH[i]) {
+      yCuts_draw.push(yCuts_mm[i]);
+      x1h_draw.push(x1h[i]);
+      x2h_draw.push(x2h[i]);
+    }
+  }
+
+  let leftOffset_mm = xCuts_draw.length ? xCuts_draw[0] + R_mm : NaN;
+  let topOffset_mm = yCuts_draw.length ? flatY - yCuts_draw[yCuts_draw.length-1] : NaN;
+
+  let vertLens = y2v_draw.map((v,i)=>Math.max(v - y1v_draw[i],0));
+  let horizLens = x2h_draw.map((v,i)=>Math.max(v - x1h_draw[i],0));
+  let totalCutLen = vertLens.reduce((a,b)=>a+b,0) + horizLens.reduce((a,b)=>a+b,0);
+
+  let timeSec = {
+    Si: cutTime(waferThk_mm.Si, 2, Infinity, totalCutLen),
+    Glass: cutTime(waferThk_mm.Glass, 1, 0.25, totalCutLen),
+    Sapphire: cutTime(waferThk_mm.Sapphire, 1, 0.08, totalCutLen)
+  };
+
+  let ch1 = h_mm + kerf_mm;
+  let ch2 = w_mm + kerf_mm;
+
+  return {
+    D_mm, D_inch, w_mm, h_mm, kerf_mm, chord_mm,
+    R_mm, flatY,
+    leftOffset_mm, topOffset_mm,
+    count: best.count,
+    xCuts_draw, yCuts_draw,
+    y1v_draw, y2v_draw,
+    x1h_draw, x2h_draw,
+    waferThk_mm,
+    timeSec,
+    ch1, ch2,
+    xLefts, yBots
+  };
+}
+
+function drawWafer(result, canvas) {
+  let ctx = canvas.getContext("2d");
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  let marginPix = 20;
+  let R = result.R_mm;
+  let ext = R + result.kerf_mm;
+  let scale = Math.min(
+    (canvas.width - 2*marginPix) / (2*ext),
+    (canvas.height - 2*marginPix) / (2*ext)
+  );
+
+  function X(xmm) { return canvas.width/2 + xmm*scale; }
+  function Y(ymm) { return canvas.height/2 - ymm*scale; }
+
+  // wafer outline with flat
+  ctx.save();
+  ctx.strokeStyle = "#b3b3b3";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  let steps = 600;
+  for (let i=0;i<=steps;i++){
+    let th = Math.PI/2 + (2*Math.PI)*i/steps;
+    let x = R*Math.cos(th);
+    let y = R*Math.sin(th);
+    if (y <= result.flatY + 1e-9) {
+      let Xp = X(x), Yp = Y(y);
+      if (i===0) ctx.moveTo(Xp,Yp); else ctx.lineTo(Xp,Yp);
+    }
+  }
+  ctx.stroke();
+
+  // flat chord line
+  ctx.beginPath();
+  ctx.strokeStyle = "green";
+  ctx.lineWidth = 1.5;
+  ctx.moveTo(X(-result.chord_mm/2), Y(result.flatY));
+  ctx.lineTo(X(result.chord_mm/2), Y(result.flatY));
+  ctx.stroke();
+
+  // left-most wafer edge reference
+  ctx.beginPath();
+  ctx.fillStyle = "green";
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 1;
+  ctx.arc(X(-R), Y(0), 3, 0, 2*Math.PI);
+  ctx.fill();
+  ctx.stroke();
+
+  // dies
+  let skyBlue = "rgba(135, 206, 235, 0.9)";
+  let tolv = 1e-9;
+  ctx.fillStyle = skyBlue;
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 0.5;
+
+  for (let xi of result.xLefts) {
+    for (let yi of result.yBots) {
+      let cx = [xi, xi+result.w_mm, xi, xi+result.w_mm];
+      let cy = [yi, yi, yi+result.h_mm, yi+result.h_mm];
+      let d2 = [];
+      for (let k=0;k<4;k++) d2.push(cx[k]*cx[k] + cy[k]*cy[k]);
+      let insideCircle = d2.every(v => v <= R*R + tolv);
+      let insideFlat = (yi + result.h_mm) <= result.flatY + tolv;
+      if (insideCircle && insideFlat) {
+        let xPix = X(xi);
+        let yPix = Y(yi + result.h_mm); // canvas y is down, so top-left
+        let wPix = result.w_mm*scale;
+        let hPix = result.h_mm*scale;
+        ctx.beginPath();
+        ctx.rect(xPix, yPix, wPix, hPix);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }
+
+  // cut lines
+  ctx.strokeStyle = "#b0b0b0";
+  ctx.lineWidth = 0.8;
+  ctx.setLineDash([4,3]);
+  // vertical
+  for (let i=0;i<result.xCuts_draw.length;i++){
+    let x = result.xCuts_draw[i];
+    let y1 = result.y1v_draw[i];
+    let y2 = result.y2v_draw[i];
+    ctx.beginPath();
+    ctx.moveTo(X(x), Y(y1));
+    ctx.lineTo(X(x), Y(y2));
+    ctx.stroke();
+  }
+  // horizontal
+  for (let i=0;i<result.yCuts_draw.length;i++){
+    let y = result.yCuts_draw[i];
+    let x1 = result.x1h_draw[i];
+    let x2 = result.x2h_draw[i];
+    ctx.beginPath();
+    ctx.moveTo(X(x1), Y(y));
+    ctx.lineTo(X(x2), Y(y));
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+document.getElementById("runBtn").addEventListener("click", () => {
+  let D_inch = parseFloat(document.getElementById("D_inch").value);
+  let w_mm = parseFloat(document.getElementById("w_mm").value);
+  let h_mm = parseFloat(document.getElementById("h_mm").value);
+  let kerf_mm = parseFloat(document.getElementById("kerf_mm").value);
+  let chord_mm = parseFloat(document.getElementById("chord_mm").value);
+  let cornerClear_mm = parseFloat(document.getElementById("cornerClear_mm").value);
+  let waferThk_mm = {
+    Si: parseFloat(document.getElementById("thk_Si").value),
+    Glass: parseFloat(document.getElementById("thk_Glass").value),
+    Sapphire: parseFloat(document.getElementById("thk_Sapphire").value)
+  };
+
+  let result = optimizeGridOffsetsJS(
+    D_inch, w_mm, h_mm, kerf_mm,
+    chord_mm, cornerClear_mm, waferThk_mm
+  );
+
+  drawWafer(result, document.getElementById("waferCanvas"));
+
+  let log = "";
+  log += "Optimal dicing-grid parameters:\n";
+  log += " Wafer diameter : " + result.D_mm.toFixed(2) + " mm (" + result.D_inch.toFixed(2) + " in)\n";
+  log += " Die size       : " + result.w_mm.toFixed(2) + " mm x " + result.h_mm.toFixed(3) + " mm\n";
+  log += " Kerf width     : " + result.kerf_mm.toFixed(4) + " mm\n";
+  log += " Flat chord len : " + result.chord_mm.toFixed(4) + " mm\n";
+  log += " --------------------------------------------\n";
+  log += "Check Values:\n";
+  log += " CH 1 (h+kerf)  : " + result.ch1.toFixed(4) + " mm\n";
+  log += " CH 2 (w+kerf)  : " + result.ch2.toFixed(4) + " mm\n";
+  log += " --------------------------------------------\n";
+  if (isFinite(result.leftOffset_mm)) {
+    log += " Left offset (from wafer edge) : " + result.leftOffset_mm.toFixed(4) + " mm\n";
+  } else {
+    log += " Left offset (from wafer edge) : (none)\n";
+  }
+  log += " # Vertical cuts (drawn)        : " + result.xCuts_draw.length + "\n";
+  if (isFinite(result.topOffset_mm)) {
+    log += " Top offset (from FLAT edge)   : " + result.topOffset_mm.toFixed(4) + " mm\n";
+  } else {
+    log += " Top offset (from FLAT edge)   : (none)\n";
+  }
+  log += " # Horizontal cuts (drawn)      : " + result.yCuts_draw.length + "\n";
+  log += " Total intact dies             : " + result.count + "\n";
+  log += " --------------------------------------------\n";
+  log += "Estimated Cutting Times:\n";
+  if (isFinite(result.waferThk_mm.Si) && result.waferThk_mm.Si > 0) {
+    log += " Silicon : " + formatTime(result.timeSec.Si) + "\n";
+  }
+  if (isFinite(result.waferThk_mm.Glass) && result.waferThk_mm.Glass > 0) {
+    log += " Glass   : " + formatTime(result.timeSec.Glass) + "\n";
+  }
+  if (isFinite(result.waferThk_mm.Sapphire) && result.waferThk_mm.Sapphire > 0) {
+    log += " Sapphire: " + formatTime(result.timeSec.Sapphire) + "\n";
+  }
+
+  document.getElementById("log").textContent = log;
+});
+</script>
+
+</body>
+</html>
