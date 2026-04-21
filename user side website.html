@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Wafer Dicing Grid Optimizer (Basic)</title>
+  <style>
+    :root {
+      --accent: #2563eb;
+      --accent-soft: #e0ecff;
+      --accent-strong: #16a34a;
+      --border-subtle: #d4d4d8;
+      --text-main: #111827;
+      --text-soft: #6b7280;
+      --bg-main: #ffffff;
+      --bg-muted: #f3f4f6;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #e5e7eb;
+      color: var(--text-main);
+      min-height: 100vh;
+      padding: 24px 12px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .shell {
+      width: 100%;
+      max-width: 1100px;
+      background: var(--bg-main);
+      border-radius: 16px;
+      border: 1px solid var(--border-subtle);
+      box-shadow:
+        0 20px 40px rgba(15, 23, 42, 0.12),
+        0 0 0 1px rgba(148, 163, 184, 0.3);
+      overflow: hidden;
+    }
+
+    .shell-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: linear-gradient(135deg, #ffffff, #eff6ff);
+    }
+
+    .shell-title h1 {
+      font-size: 18px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #1f2937;
+    }
+
+    .shell-title p {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+
+    .shell-body {
+      padding: 16px;
+      background: #f9fafb;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .panel-title {
+      font-size: 15px;
+      font-weight: 500;
+      color: #111827;
+    }
+
+    .panel-subtitle {
+      font-size: 12px;
+      color: var(--text-soft);
+    }
+
+    button {
+      border-radius: 999px;
+      border: 1px solid #2563eb;
+      background: linear-gradient(135deg, #2563eb, #16a34a);
+      color: #ffffff;
+      padding: 7px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: filter 0.16s ease, transform 0.1s ease;
+    }
+
+    button:hover {
+      filter: brightness(1.04);
+      transform: translateY(-1px);
+    }
+
+    #optLayout {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    #optColumnInputs, #optColumnCanvas, #optColumnLog {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    #optColumnInputs { flex: 0 0 220px; max-width: 260px; }
+    #optColumnCanvas { flex: 1 1 360px; min-width: 320px; text-align: center; }
+    #optColumnLog    { flex: 0 0 260px; max-width: 320px; }
+
+    #optColumnInputs h3, #optColumnCanvas h3, #optColumnLog h3 {
+      font-size: 13px;
+      margin-bottom: 8px;
+      color: #111827;
+    }
+
+    .field { margin-bottom: 8px; }
+
+    .field label {
+      display: block;
+      font-size: 11px;
+      color: #4b5563;
+      margin-bottom: 2px;
+    }
+
+    .field input, .field select {
+      width: 100%;
+      padding: 4px 6px;
+      font-size: 12px;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      background: #ffffff;
+    }
+
+    .field input:focus, .field select:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 1px #bfdbfe;
+    }
+
+    #optRunRow {
+      margin-top: 10px;
+      text-align: right;
+    }
+
+    #waferCanvas {
+      border: 1px solid #d1d5db;
+      background: #fdfdfd;
+      max-width: 100%;
+      height: auto;
+    }
+
+    #log {
+      white-space: pre;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+      max-height: 420px;
+      overflow: auto;
+      color: #111827;
+    }
+
+    @media (max-width: 900px) {
+      #optColumnInputs, #optColumnCanvas, #optColumnLog {
+        flex: 1 1 100%;
+        max-width: 100%;
+      }
+    }
+
+    .faq-section {
+      margin-top: 20px;
+      padding: 14px 16px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+    }
+
+    .faq-section h2 {
+      font-size: 15px;
+      font-weight: 500;
+      color: #111827;
+      margin-bottom: 4px;
+    }
+
+    .faq-section .faq-intro {
+      font-size: 12px;
+      color: var(--text-soft);
+      margin-bottom: 12px;
+    }
+
+    .faq-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .faq-item {
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #fafbfc;
+      padding: 10px 14px;
+      transition: border-color 0.16s ease, box-shadow 0.16s ease;
+    }
+
+    .faq-item[open] {
+      border-color: #bfdbfe;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+    }
+
+    .faq-item summary {
+      font-size: 13px;
+      font-weight: 500;
+      color: #111827;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+    }
+
+    .faq-item summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .faq-item summary::after {
+      content: "+";
+      color: var(--text-soft);
+      font-size: 16px;
+      font-weight: 400;
+      margin-left: 10px;
+    }
+
+    .faq-item[open] summary::after {
+      content: "−";
+    }
+
+    .faq-item summary:hover {
+      color: var(--accent);
+    }
+
+    .faq-answer {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #f3f4f6;
+      font-size: 12px;
+      color: #4b5563;
+      line-height: 1.5;
+    }
+
+    .faq-answer p {
+      margin-bottom: 6px;
+    }
+
+    .faq-answer p:last-child {
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="shell-header">
+      <div class="shell-title">
+        <h1>Wafer Dicing Grid Optimizer</h1>
+        <p>Basic mode — simple inputs and wafer drawing.</p>
+      </div>
+    </header>
+
+    <main class="shell-body">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Inputs &amp; result</h2>
+          <p class="panel-subtitle">
+            Enter wafer and die dimensions, then click Optimize &amp; Draw.
+          </p>
+        </div>
+      </div>
+
+      <div id="optLayout">
+        <div id="optColumnInputs">
+          <h3>Inputs</h3>
+          <div class="field">
+            <label>Bulk wafer material</label>
+            <select id="material">
+              <option value="Si">Silicon</option>
+              <option value="Glass">Glass</option>
+              <option value="Sapphire">Sapphire</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Wafer diameter (inch)</label>
+            <input id="D_inch" type="number" step="0.01" value="4">
+          </div>
+          <div class="field">
+            <label>Die width (mm)</label>
+            <input id="w_mm" type="number" step="0.001" value="10">
+          </div>
+          <div class="field">
+            <label>Die height (mm)</label>
+            <input id="h_mm" type="number" step="0.001" value="10">
+          </div>
+          <div id="optRunRow">
+            <button id="runBtn">Optimize &amp; Draw</button>
+          </div>
+        </div>
+
+        <div id="optColumnCanvas">
+          <h3>Wafer drawing</h3>
+          <canvas id="waferCanvas" width="640" height="720"></canvas>
+        </div>
+
+        <div id="optColumnLog">
+          <h3>Results</h3>
+          <pre id="log">No run yet.</pre>
+        </div>
+      </div>
+
+      <div class="faq-section">
+        <h2>Frequently Asked Questions</h2>
+        <p class="faq-intro">Common questions about dicing and what this estimator shows.</p>
+
+        <div class="faq-list">
+          <details class="faq-item" open>
+            <summary>What do the green, orange, and red dies mean?</summary>
+            <div class="faq-answer">
+              <p>[Placeholder — explain the color tiers: green = safe, orange = within 3mm of edge (may be lost to positioning error), red = crosses wafer boundary.]</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>Why are the kerf widths different for each material?</summary>
+            <div class="faq-answer">
+              <p>[Placeholder — explain blade thickness differences: Si uses thinner blades (~0.035 mm), Glass/Sapphire require thicker blades (~0.25 mm) due to material hardness/brittleness.]</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>Is this estimate guaranteed to match the actual result?</summary>
+            <div class="faq-answer">
+              <p>[Placeholder — clarify this is an estimator only; actual yield depends on alignment, wafer flat orientation, edge exclusion, and operator decisions.]</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>What wafer diameter / flat size does this assume?</summary>
+            <div class="faq-answer">
+              <p>[Placeholder — note the chord length is fixed at 30 mm (standard 4" flat); non-4" wafers may display the flat incorrectly but intact die counts are still approximately correct.]</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>How do I submit an actual dicing request?</summary>
+            <div class="faq-answer">
+              <p>[Placeholder — link to the dicing request form and any required info.]</p>
+            </div>
+          </details>
+
+          <details class="faq-item">
+            <summary>Who do I contact for questions or special requirements?</summary>
+            <div class="faq-answer">
+              <p>[Placeholder — contact info.]</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    function cutTime(thk, feed, step, totalCutLen) {
+      if (!isFinite(thk) || thk <= 0) return NaN;
+      if (!isFinite(feed) || feed <= 0) return NaN;
+      if (!isFinite(step) || step <= 0) step = Infinity;
+      const nPass = (step === Infinity) ? 1 : Math.ceil(thk / step);
+      return (totalCutLen / feed) * nPass;
+    }
+
+    function uniqueAbsTol(arr, tol) {
+      if (arr.length === 0) return [];
+      arr = arr.slice().sort((a,b) => a - b);
+      const v = [arr[0]];
+      for (let i = 1; i < arr.length; i++) {
+        if (Math.abs(arr[i] - v[v.length - 1]) > tol) v.push(arr[i]);
+      }
+      return v;
+    }
+
+    function optimizeGridOffsetsAdvanced(D_inch, w_mm, h_mm, kerf_mm, chord_mm,
+                                         cornerClear_mm, waferThk_mm) {
+      const D_mm = D_inch * 25.4;
+      const R_mm = D_mm / 2;
+
+      const pitchX = w_mm + kerf_mm;
+      const pitchY = h_mm + kerf_mm;
+
+      let sagitta_mm = 0;
+      if (chord_mm > 0) {
+        const tmp = R_mm*R_mm - (chord_mm/2)*(chord_mm/2);
+        sagitta_mm = R_mm - Math.sqrt(Math.max(tmp, 0));
+      }
+      const flatY = R_mm - sagitta_mm;
+
+      let R_eff2 = Math.max(R_mm - cornerClear_mm, 0);
+      R_eff2 *= R_eff2;
+      const flatYeff = flatY - cornerClear_mm;
+      const tol = 1e-12;
+
+      const dxVals = [], dyVals = [];
+      const step = 0.005 * Math.min(w_mm, h_mm);
+      const nX = Math.max(200, Math.ceil(pitchX / step));
+      const nY = Math.max(200, Math.ceil(pitchY / step));
+      for (let i = 0; i < nX; i++) dxVals.push(pitchX * i / (nX - 1));
+      for (let j = 0; j < nY; j++) dyVals.push(pitchY * j / (nY - 1));
+
+      const best = {
+        count: -Infinity, imbalance: Infinity,
+        minMargin: -Infinity, minCornerClear: -Infinity,
+        dx: 0, dy: 0
+      };
+
+      for (const dx of dxVals) {
+        for (const dy of dyVals) {
+          let cnt = 0;
+          let minArcClr = Infinity;
+          let minFlatClr = Infinity;
+          let xL = -R_mm + dx;
+
+          while (xL + w_mm <= R_mm + 1e-9) {
+            let yB = -R_mm + dy;
+            while (yB + h_mm <= R_mm + 1e-9) {
+              const cx = [xL, xL+w_mm, xL, xL+w_mm];
+              const cy = [yB, yB, yB+h_mm, yB+h_mm];
+              const d2 = [];
+              for (let k = 0; k < 4; k++) d2.push(cx[k]*cx[k] + cy[k]*cy[k]);
+              const insideCircle = d2.every(v => v <= R_eff2 + tol);
+              const insideFlat = cy.every(v => v <= flatYeff + tol);
+
+              if (insideCircle && insideFlat) {
+                cnt++;
+                const arcClrs = d2.map(v => R_mm - Math.sqrt(v));
+                const flatClrs = cy.map(v => flatY - v);
+                minArcClr = Math.min(minArcClr, Math.min(...arcClrs));
+                minFlatClr = Math.min(minFlatClr, Math.min(...flatClrs));
+              }
+              yB += pitchY;
+            }
+            xL += pitchX;
+          }
+
+          if (cnt < best.count) continue;
+
+          const leftEdge = -R_mm + dx;
+          const rightEdge = xL - pitchX + w_mm;
+          const bottomEdge = -R_mm + dy;
+          const topEdge = Math.min(
+            (-R_mm + dy) + Math.floor((2*R_mm - h_mm - dy)/pitchY)*pitchY + h_mm,
+            flatY
+          );
+
+          const leftMargin = leftEdge + R_mm;
+          const rightMargin = R_mm - rightEdge;
+          const bottomMargin = bottomEdge + R_mm;
+          const topMargin = flatY - topEdge;
+
+          const imbalance = Math.abs(leftMargin - rightMargin) +
+                            Math.abs(bottomMargin - topMargin);
+          const minMargin = Math.min(leftMargin, rightMargin, bottomMargin, topMargin);
+          const minCornerClear = Math.min(minArcClr, minFlatClr);
+
+          let better = false;
+          if (cnt > best.count) {
+            better = true;
+          } else if (cnt === best.count) {
+            if (imbalance < best.imbalance - 1e-9) {
+              better = true;
+            } else if (Math.abs(imbalance - best.imbalance) < 1e-9 &&
+                       minMargin > best.minMargin + 1e-9) {
+              better = true;
+            } else if (Math.abs(imbalance - best.imbalance) < 1e-9 &&
+                       Math.abs(minMargin - best.minMargin) < 1e-9 &&
+                       minCornerClear > best.minCornerClear + 1e-9) {
+              better = true;
+            }
+          }
+
+          if (better) {
+            best.count = cnt;
+            best.dx = dx; best.dy = dy;
+            best.imbalance = imbalance;
+            best.minMargin = minMargin;
+            best.minCornerClear = minCornerClear;
+          }
+        }
+      }
+
+      const x0 = -R_mm + best.dx;
+      const y0 = -R_mm + best.dy;
+      const xLefts = [];
+      for (let x = x0; x <= R_mm - w_mm + 1e-9; x += pitchX) xLefts.push(x);
+      const yBots = [];
+      for (let y = y0; y <= R_mm - h_mm + 1e-9; y += pitchY) yBots.push(y);
+
+      const xCuts_all = [];
+      const yCuts_all = [];
+      for (const x of xLefts) {
+        xCuts_all.push(x - kerf_mm/2);
+        xCuts_all.push(x + w_mm + kerf_mm/2);
+      }
+      for (const y of yBots) {
+        yCuts_all.push(y - kerf_mm/2);
+        yCuts_all.push(y + h_mm + kerf_mm/2);
+      }
+
+      const xCuts_cand = xCuts_all.filter(x => Math.abs(x) <= R_mm + 1e-9);
+      const yCuts_cand = yCuts_all.filter(y => Math.abs(y) <= R_mm + 1e-9 && y <= flatY + 1e-9);
+
+      const xCuts_mm = uniqueAbsTol(xCuts_cand, 1e-9);
+      const yCuts_mm = uniqueAbsTol(yCuts_cand, 1e-9);
+
+      const segTol = 1e-9;
+
+      const capY = xCuts_mm.map(x => Math.sqrt(Math.max(R_mm*R_mm - x*x, 0)));
+      const y1v = capY.map(v => -v);
+      const y2v = capY.map(v => Math.min(v, flatY));
+      const hasV = y2v.map((v,i)=> v - y1v[i] > segTol);
+
+      const capX = yCuts_mm.map(y => Math.sqrt(Math.max(R_mm*R_mm - y*y, 0)));
+      const x1h = capX.map(v => -v);
+      const x2h = capX.map(v => v);
+      const hasH = yCuts_mm.map((y,i)=> y <= flatY - segTol && x2h[i] - x1h[i] > segTol);
+
+      const xCuts_draw = [], yCuts_draw = [];
+      const y1v_draw = [], y2v_draw = [];
+      const x1h_draw = [], x2h_draw = [];
+      for (let i = 0; i < xCuts_mm.length; i++) {
+        if (hasV[i]) {
+          xCuts_draw.push(xCuts_mm[i]);
+          y1v_draw.push(y1v[i]);
+          y2v_draw.push(y2v[i]);
+        }
+      }
+      for (let i = 0; i < yCuts_mm.length; i++) {
+        if (hasH[i]) {
+          yCuts_draw.push(yCuts_mm[i]);
+          x1h_draw.push(x1h[i]);
+          x2h_draw.push(x2h[i]);
+        }
+      }
+
+      return {
+        D_mm, D_inch, w_mm, h_mm, kerf_mm, chord_mm,
+        R_mm, flatY,
+        count: best.count,
+        xCuts_draw, yCuts_draw,
+        y1v_draw, y2v_draw,
+        x1h_draw, x2h_draw,
+        waferThk_mm,
+        xLefts, yBots
+      };
+    }
+
+    function drawWaferCommon(result, canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      const marginPix = 20;
+      const R = result.R_mm;
+      const ext = R + result.kerf_mm;
+      const scale = Math.min(
+        (canvas.width - 2*marginPix) / (2*ext),
+        (canvas.height - 2*marginPix) / (2*ext)
+      );
+
+      const X = xmm => canvas.width/2 + xmm*scale;
+      const Y = ymm => canvas.height/2 - ymm*scale;
+
+      ctx.save();
+      ctx.strokeStyle = "#b3b3b3";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      const steps = 600;
+      for (let i = 0; i <= steps; i++) {
+        const th = Math.PI/2 + (2*Math.PI)*i/steps;
+        const x = R*Math.cos(th);
+        const y = R*Math.sin(th);
+        if (y <= result.flatY + 1e-9) {
+          const Xp = X(x), Yp = Y(y);
+          if (i === 0) ctx.moveTo(Xp,Yp); else ctx.lineTo(Xp,Yp);
+        }
+      }
+      ctx.stroke();
+
+      // Build an extended grid that includes partial (edge) dies so we can
+      // color perfect dies green and cut-off dies red.
+      const pitchX = result.w_mm + result.kerf_mm;
+      const pitchY = result.h_mm + result.kerf_mm;
+      const phaseX = result.xLefts.length ? result.xLefts[0] : 0;
+      const phaseY = result.yBots.length ? result.yBots[0] : 0;
+
+      // Die overlaps wafer horizontally when xi + w_mm > -R and xi < R
+      const nXStart = Math.ceil((-R - result.w_mm - phaseX) / pitchX);
+      const nXEnd   = Math.floor((R - phaseX) / pitchX);
+      const xLeftsAll = [];
+      for (let n = nXStart; n <= nXEnd; n++) xLeftsAll.push(phaseX + n * pitchX);
+
+      // Die overlaps wafer vertically when yi + h_mm > -R and yi < flatY
+      const nYStart = Math.ceil((-R - result.h_mm - phaseY) / pitchY);
+      const nYEnd   = Math.floor((result.flatY - phaseY) / pitchY);
+      const yBotsAll = [];
+      for (let n = nYStart; n <= nYEnd; n++) yBotsAll.push(phaseY + n * pitchY);
+
+      const greenFill  = "rgba(187, 247, 208, 0.9)"; // light pastel green - safe
+      const orangeFill = "rgba(254, 215, 170, 0.9)"; // light pastel orange - close call
+      const redFill    = "rgba(254, 235, 235, 0.65)"; // very light pastel red - cut off
+      const tolv = 1e-9;
+
+      // Safety buffer: corners within this distance of the wafer edge are
+      // flagged as "close call" because measurement / positioning error of
+      // 1-2 mm could push them off-wafer.
+      const CLOSE_MARGIN = 3; // mm
+      const safeR = Math.max(R - CLOSE_MARGIN, 0);
+      const safeR2 = safeR * safeR;
+      const safeFlatY = result.flatY - CLOSE_MARGIN;
+
+      // Clip subsequent fills to the wafer silhouette (circle minus flat cap)
+      // so partial-die rectangles get visually truncated at the edge.
+      ctx.save();
+      ctx.beginPath();
+      const clipSteps = 600;
+      for (let i = 0; i <= clipSteps; i++) {
+        const th = Math.PI/2 + (2*Math.PI)*i/clipSteps;
+        const x = R*Math.cos(th);
+        const y = R*Math.sin(th);
+        if (y <= result.flatY + 1e-9) {
+          const Xp = X(x), Yp = Y(y);
+          if (i === 0) ctx.moveTo(Xp, Yp); else ctx.lineTo(Xp, Yp);
+        }
+      }
+      ctx.closePath();
+      ctx.clip();
+
+      ctx.strokeStyle = "black";
+      ctx.lineWidth = 0.5;
+
+      let cutOffCount = 0;
+      let closeCallCount = 0;
+
+      for (const xi of xLeftsAll) {
+        for (const yi of yBotsAll) {
+          const cx = [xi, xi+result.w_mm, xi, xi+result.w_mm];
+          const cy = [yi, yi, yi+result.h_mm, yi+result.h_mm];
+          const cornersValid = cx.map((x, k) => {
+            const inCircle = x*x + cy[k]*cy[k] <= R*R + tolv;
+            const belowFlat = cy[k] <= result.flatY + tolv;
+            return inCircle && belowFlat;
+          });
+          const cornersSafe = cx.map((x, k) => {
+            const wellInCircle = x*x + cy[k]*cy[k] <= safeR2 + tolv;
+            const wellBelowFlat = cy[k] <= safeFlatY + tolv;
+            return wellInCircle && wellBelowFlat;
+          });
+          const allValid = cornersValid.every(v => v);
+          const anyValid = cornersValid.some(v => v);
+          const allSafe  = cornersSafe.every(v => v);
+          if (!anyValid) continue; // die entirely outside wafer, skip
+
+          const xPix = X(xi);
+          const yPix = Y(yi + result.h_mm);
+          const wPix = result.w_mm * scale;
+          const hPix = result.h_mm * scale;
+
+          let fillColor;
+          if (!allValid) {
+            fillColor = redFill;
+            cutOffCount++;
+          } else if (!allSafe) {
+            fillColor = orangeFill;
+            closeCallCount++;
+          } else {
+            fillColor = greenFill;
+          }
+
+          ctx.fillStyle = fillColor;
+          ctx.beginPath();
+          ctx.rect(xPix, yPix, wPix, hPix);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+      result.cutOffCount = cutOffCount;
+      result.closeCallCount = closeCallCount;
+
+      ctx.strokeStyle = "#b0b0b0";
+      ctx.lineWidth = 0.8;
+      ctx.setLineDash([4,3]);
+      for (let i = 0; i < result.xCuts_draw.length; i++) {
+        const x = result.xCuts_draw[i];
+        const y1 = result.y1v_draw[i];
+        const y2 = result.y2v_draw[i];
+        ctx.beginPath();
+        ctx.moveTo(X(x), Y(y1));
+        ctx.lineTo(X(x), Y(y2));
+        ctx.stroke();
+      }
+      for (let i = 0; i < result.yCuts_draw.length; i++) {
+        const y = result.yCuts_draw[i];
+        const x1 = result.x1h_draw[i];
+        const x2 = result.x2h_draw[i];
+        ctx.beginPath();
+        ctx.moveTo(X(x1), Y(y));
+        ctx.lineTo(X(x2), Y(y));
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    const KERF_BY_MATERIAL = { Si: 0.035, Glass: 0.25, Sapphire: 0.25 };
+
+    document.getElementById("runBtn").addEventListener("click", () => {
+      const material = document.getElementById("material").value;
+      const D_inch = parseFloat(document.getElementById("D_inch").value);
+      const w_mm = parseFloat(document.getElementById("w_mm").value);
+      const h_mm = parseFloat(document.getElementById("h_mm").value);
+      const kerf_mm = KERF_BY_MATERIAL[material];
+      const chord_mm = 30;
+      const cornerClear_mm = 2;
+      const waferThk_mm = { Si: 0.5, Glass: 0.5, Sapphire: 0.5 };
+
+      const result = optimizeGridOffsetsAdvanced(
+        D_inch, w_mm, h_mm, kerf_mm,
+        chord_mm, cornerClear_mm, waferThk_mm
+      );
+
+      drawWaferCommon(result, document.getElementById("waferCanvas"));
+
+      let log = "";
+      log += "Optimal dicing-grid parameters:\n";
+      log += " Material       : " + material + "\n";
+      log += " Wafer diameter : " + result.D_mm.toFixed(2) +
+             " mm (" + result.D_inch.toFixed(2) + " in)\n";
+      log += " Die size       : " + result.w_mm.toFixed(2) +
+             " mm x " + result.h_mm.toFixed(3) + " mm\n";
+      log += " Kerf width     : " + result.kerf_mm.toFixed(4) + " mm (from material)\n";
+      log += " =======================================\n";
+      log += " # Vertical cuts (drawn)        : " + result.xCuts_draw.length + "\n";
+      log += " # Horizontal cuts (drawn)      : " + result.yCuts_draw.length + "\n";
+      log += " Safe intact dies (green)       : " + result.count + "\n";
+      if (typeof result.closeCallCount === "number") {
+        log += " Close-call dies  (orange, <3mm): " + result.closeCallCount + "\n";
+      }
+      if (typeof result.cutOffCount === "number") {
+        log += " Cut-off edge dies (red)        : " + result.cutOffCount + "\n";
+      }
+
+      document.getElementById("log").textContent = log;
+    });
+  </script>
+</body>
+</html>
