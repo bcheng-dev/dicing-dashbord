@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Request Status Dashboard + Wafer Optimizer — QuOpti_v22</title>
+  <title>Request Status Dashboard + Wafer Optimizer — QuOpti_v24</title>
   <style>
     :root {
       --accent: #2563eb;
@@ -214,8 +214,12 @@
       color: #ffffff;
     }
 
+    /* .btn:hover sets the background shorthand and a dark colour, which would
+       otherwise strip this gradient and repaint the label — restate both. */
     .btn-primary:hover {
-      filter: brightness(1.04);
+      filter: brightness(1.06);
+      background: linear-gradient(135deg, #2563eb, #16a34a);
+      color: #ffffff;
     }
 
     .btn-viz {
@@ -1790,19 +1794,25 @@ td.details-cell {
       let yBots = yBots_all.filter(y => validYset.has(y));
 
       // ---- Center the valid die grid on the wafer ----
+      // Two goals, in priority order:
+      //   1. never lose a die
+      //   2. put a CROSS — where a vertical and a horizontal cut meet — exactly
+      //      on the wafer centre, because that is the mark an operator squares
+      //      the job up against
+      // Bounding-box centering alone rarely lands a cut on 0, and forcing the
+      // snap can push a corner die past the clearance. So several candidate
+      // shifts are tried and the best one that keeps every die is taken.
       if (xLefts.length > 0 && yBots.length > 0) {
         const xBBCenter = (xLefts[0] + xLefts[xLefts.length - 1] + w_mm) / 2;
         const yBBCenter = (yBots[0] + yBots[yBots.length - 1] + h_mm) / 2;
-        const shiftX = -xBBCenter;                         // center horizontally on wafer
-        const shiftY = ((-R_mm + flatY) / 2) - yBBCenter; // center vertically in usable area
+        const baseX = -xBBCenter;
+        const baseY = ((-R_mm + flatY) / 2) - yBBCenter;
 
-        const cX = xLefts.map(x => x + shiftX);
-        const cY = yBots.map(y => y + shiftY);
-
-        // Re-validate (centering shift may push a corner die outside clearance zone)
-        const vX2 = new Set(), vY2 = new Set();
-        for (const xi of cX) {
-          for (const yi of cY) {
+        // Count dies that survive a given shift, and report the surviving rows/cols.
+        const evaluate = (dx, dy) => {
+          const cX = xLefts.map(x => x + dx), cY = yBots.map(y => y + dy);
+          const vX2 = new Set(), vY2 = new Set();
+          for (const xi of cX) for (const yi of cY) {
             const cx2 = [xi, xi+w_mm, xi, xi+w_mm];
             const cy2 = [yi, yi, yi+h_mm, yi+h_mm];
             const d2c = cx2.map((x,k) => x*x + cy2[k]*cy2[k]);
@@ -1810,21 +1820,43 @@ td.details-cell {
               vX2.add(xi); vY2.add(yi);
             }
           }
-        }
-        const cXL = cX.filter(x => vX2.has(x));
-        const cYB = cY.filter(y => vY2.has(y));
-
-        // Accept centered layout only if die count is preserved
-        let cCnt = 0;
-        for (const xi of cXL) {
-          for (const yi of cYB) {
+          const XL = cX.filter(x => vX2.has(x)), YB = cY.filter(y => vY2.has(y));
+          let n = 0;
+          for (const xi of XL) for (const yi of YB) {
             const cx2 = [xi, xi+w_mm, xi, xi+w_mm];
             const cy2 = [yi, yi, yi+h_mm, yi+h_mm];
             const d2c = cx2.map((x,k) => x*x + cy2[k]*cy2[k]);
-            if (d2c.every(v => v <= R_eff2 + tol) && cy2.every(v => v <= flatYeff + tol)) cCnt++;
+            if (d2c.every(v => v <= R_eff2 + tol) && cy2.every(v => v <= flatYeff + tol)) n++;
+          }
+          return { n, XL, YB };
+        };
+
+        // Shifts that would land a cut line on zero, nearest first.
+        const snapCandidates = (arr, base, size) => {
+          const cuts = arr.flatMap(v => [v + base - kerf_mm/2, v + base + size + kerf_mm/2]);
+          const uniq = [...new Set(cuts.map(c => Math.round(c * 1e6) / 1e6))];
+          uniq.sort((a,b) => Math.abs(a) - Math.abs(b));
+          return [base, ...uniq.slice(0, 4).map(c => base - c)];
+        };
+        const candX = snapCandidates(xLefts, baseX, w_mm);
+        const candY = snapCandidates(yBots,  baseY, h_mm);
+
+        const onZero = v => Math.abs(v) < 1e-6;
+        const crossAt = (dx, dy) =>
+          xLefts.some(x => onZero(x + dx - kerf_mm/2) || onZero(x + dx + w_mm + kerf_mm/2)) &&
+          yBots .some(y => onZero(y + dy - kerf_mm/2) || onZero(y + dy + h_mm + kerf_mm/2));
+
+        let pick = null;
+        for (const dx of candX) {
+          for (const dy of candY) {
+            const r = evaluate(dx, dy);
+            if (r.n < best.count) continue;              // never trade away a die
+            const cross = crossAt(dx, dy);
+            const score = (cross ? 1e6 : 0) + r.n * 100 - (Math.abs(dx) + Math.abs(dy)) * 0.01;
+            if (!pick || score > pick.score) pick = { score, cross, dx, dy, r };
           }
         }
-        if (cCnt >= best.count) { xLefts = cXL; yBots = cYB; }
+        if (pick) { xLefts = pick.r.XL; yBots = pick.r.YB; }
       }
 
       const xCuts_all = [];
@@ -1903,6 +1935,28 @@ td.details-cell {
         ch1, ch2,
         xLefts, yBots
       };
+    }
+
+    // How many dies would be lost by shifting the grid so a cut lands on the
+    // wafer centre. Only one grid phase can do that, so this is a straight
+    // count at that phase versus the current one.
+    function crossCentringCost(result){
+      const { R_mm, flatY, cornerClear_mm, w_mm, h_mm, kerf_mm } = result;
+      const Re = Math.max(R_mm - cornerClear_mm, 0), R2 = Re*Re;
+      const fy = flatY - cornerClear_mm, tol = 1e-9;
+      const px = w_mm + kerf_mm, py = h_mm + kerf_mm;
+      // Phase that puts a cut at 0: a die edge sits half a kerf off centre.
+      const x0 = kerf_mm/2, y0 = kerf_mm/2;
+      const span = Math.ceil(R_mm / Math.min(px, py)) + 2;
+      let n = 0;
+      for (let i = -span; i <= span; i++){
+        for (let j = -span; j <= span; j++){
+          const x = x0 + i*px, y = y0 + j*py;
+          const cx = [x, x+w_mm, x, x+w_mm], cy = [y, y, y+h_mm, y+h_mm];
+          if (cx.every((v,k) => v*v + cy[k]*cy[k] <= R2 + tol) && cy.every(v => v <= fy + tol)) n++;
+        }
+      }
+      return Math.max(result.count - n, 0);
     }
 
     function drawWaferCommon(result, canvas) {
@@ -2372,6 +2426,21 @@ td.details-cell {
       }
       log += " # Horizontal cuts (drawn)      : " + result.yCuts_draw.length + "\n";
       log += " Total intact dies             : " + result.count + "\n";
+
+      // Whether a cross — a vertical and horizontal cut meeting — sits on the
+      // wafer centre. Cuts are one pitch apart, so only a single grid phase can
+      // do it; when that is not the phase with the most dies, centring costs
+      // some. Report the price rather than paying it silently.
+      (function reportCross(){
+        const onZero = a => a.some(v => Math.abs(v) < 1e-6);
+        const centred = onZero(result.xCuts_draw) && onZero(result.yCuts_draw);
+        log += " Cross on wafer centre        : " + (centred ? "yes" : "no") + "\n";
+        if (!centred) {
+          const cost = crossCentringCost(result);
+          if (cost > 0) log += "   centring one would cost " + cost + " die" + (cost === 1 ? "" : "s") + "\n";
+          log += "   (use \u2295 Center cuts to do it anyway)\n";
+        }
+      })();
       log += " --------------------------------------------\n";
       log += "Estimated Cutting Times:\n";
       if (isFinite(result.waferThk_mm.Si) && result.waferThk_mm.Si > 0) {
